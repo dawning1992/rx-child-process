@@ -5,7 +5,7 @@ English | [简体中文](./README.zh-CN.md)
 A typed RxJS wrapper for Node.js `child_process`. It lets you run executables, shell commands, forked Node.js modules, and inline Node.js code as cancellable, observable processes with explicit resource limits and a consistent failure model.
 
 - Runtime: Node.js 20+
-- RxJS: peer dependency `rxjs@^7.8.2`
+- RxJS: peer dependency `rxjs@^7.5.5`
 - Module formats: ESM and CommonJS
 - Package includes: TypeScript declarations
 

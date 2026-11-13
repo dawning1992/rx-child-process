@@ -5,7 +5,7 @@
 一个面向 Node.js `child_process` 的类型化 RxJS 封装。你可以将可执行文件、shell 命令、Node.js 模块和 Node.js 内联代码作为可取消、可观测且带资源约束的子进程运行，并使用统一的失败模型处理结果。
 
 - 运行环境：Node.js 20+
-- RxJS：对等依赖 `rxjs@^7.8.2`
+- RxJS：对等依赖 `rxjs@^7.5.5`
 - 模块格式：ESM 和 CommonJS
 - 包内容：包含 TypeScript 类型声明
 

@@ -6,6 +6,7 @@ on:
 
 jobs:
   test:
+    name: Node ${{ matrix.node }} / ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -34,10 +35,8 @@ jobs:
         run: pnpm exec vitest run test/execution.test.ts -t "清理真实进程树中的孙进程"
       - run: pnpm test
       - run: pnpm build
-      - name: ESM import smoke test
-        run: node --input-type=module -e "import('./dist/index.js').then(m => console.log(typeof m.rxSpawn))"
-      - name: CJS require smoke test
-        run: node -e "console.log(typeof require('./dist/index.cjs').rxSpawn)"
+      - name: Packed package ESM/CJS import smoke test
+        run: pnpm test:package
 
   coverage:
     runs-on: ubuntu-latest
