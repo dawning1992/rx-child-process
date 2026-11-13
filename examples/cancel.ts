@@ -1,5 +1,10 @@
 import { firstValueFrom } from "rxjs";
-import { RxChildProcessError, rxCollect, rxSpawn } from "../src/index.js";
+import {
+  isRxChildProcessError,
+  RxErrorKind,
+  rxCollect,
+  rxSpawn,
+} from "../src/index.js";
 
 const controller = new AbortController();
 setTimeout(() => controller.abort(), 100);
@@ -19,7 +24,7 @@ try {
     ),
   );
 } catch (error) {
-  if (error instanceof RxChildProcessError && error.kind === "abort") {
+  if (isRxChildProcessError(error, RxErrorKind.Abort)) {
     process.stdout.write("子进程已取消并完成回收\n");
   } else {
     throw error;

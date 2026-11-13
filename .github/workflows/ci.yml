@@ -29,6 +29,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
+      - name: Real taskkill process-tree cleanup
+        if: runner.os == 'Windows'
+        run: pnpm exec vitest run test/execution.test.ts -t "清理真实进程树中的孙进程"
       - run: pnpm test
       - run: pnpm build
       - name: ESM import smoke test

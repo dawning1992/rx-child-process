@@ -15,6 +15,7 @@ import type {
   RxCommandDescriptor,
   RxProcessEvent,
   RxProcessInput,
+  RxSendHandle,
   RxSpawnEvent,
 } from "./types.js";
 import { terminateProcess } from "./termination.js";
@@ -203,7 +204,6 @@ export function execute<
       stderr: Buffer.concat(stderrCapture.chunks, stderrCapture.bytes),
       code: exitCode,
       signal: exitSignal,
-      messages: [] as readonly unknown[],
       durationMs: durationMs(),
     });
 
@@ -225,7 +225,7 @@ export function execute<
       const error = new RxChildProcessError(message, {
         kind,
         command: request.command,
-        result: child ? snapshot() : undefined,
+        result: snapshot(),
         cause,
       });
       runCleanup();
@@ -386,14 +386,6 @@ export function execute<
     }
 
     const currentChild = child;
-    const spawnEvent: RxSpawnEvent = {
-      type: "spawn",
-      pid: currentChild.pid,
-      child: currentChild,
-      command: request.command,
-      encoding: normalized.encoding,
-    };
-
     const stdoutChannel = createChannel(
       "stdout",
       stdoutCapture,
@@ -408,7 +400,19 @@ export function execute<
     const onSpawn = (): void => {
       spawnSeen = true;
       if (!finished && !subscriber.closed) {
-        subscriber.next(spawnEvent);
+        const pid = currentChild.pid;
+        if (pid === undefined) {
+          fail("spawn", "子进程启动后未分配 PID");
+          return;
+        }
+        const event: RxSpawnEvent = {
+          type: "spawn",
+          pid,
+          child: currentChild,
+          command: request.command,
+          encoding: normalized.encoding,
+        };
+        subscriber.next(event);
       }
     };
     const onError = (error: Error): void => {
@@ -433,7 +437,7 @@ export function execute<
         subscriber.next({
           type: "message",
           message: message as TMessage,
-          sendHandle,
+          sendHandle: sendHandle as RxSendHandle | undefined,
         });
       }
     };
@@ -459,11 +463,6 @@ export function execute<
       }
       finalizeChannel(stdoutChannel);
       finalizeChannel(stderrChannel);
-
-      if (subscriber.closed) {
-        runCleanup();
-        return;
-      }
 
       finished = true;
       const closeEvent = {
@@ -878,10 +877,7 @@ function wireObservableInput(
     }
 
     while (queue.length > 0) {
-      const item = queue.shift();
-      if (!item) {
-        break;
-      }
+      const item = queue.shift() as QueuedInput;
       queuedBytes -= item.bytes;
       try {
         if (!stdin.write(item.chunk)) {

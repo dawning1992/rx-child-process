@@ -1,6 +1,9 @@
 import { performance } from "node:perf_hooks";
 import { Observable, type Subscription } from "rxjs";
-import { RxChildProcessError } from "./errors.js";
+import {
+  RxChildProcessError,
+  isRxChildProcessError,
+} from "./errors.js";
 import type {
   RxCollectOptions,
   RxCommandDescriptor,
@@ -57,7 +60,7 @@ export function rxCollect<
 
     let command = UNKNOWN_COMMAND;
     let pid: number | undefined;
-    let encoding: BufferEncoding | null = null;
+    let encoding: BufferEncoding = "utf8";
     let code: number | null = null;
     let signal: NodeJS.Signals | null = null;
     let durationMs: number | undefined;
@@ -91,22 +94,18 @@ export function rxCollect<
       pid,
       stdout:
         stdout.mode === "string"
-          ? Buffer.from(stdout.strings.join(""), encoding ?? "utf8")
+          ? Buffer.from(stdout.strings.join(""), encoding)
           : Buffer.concat(stdout.buffers, stdout.bytes),
       stderr:
         stderr.mode === "string"
-          ? Buffer.from(stderr.strings.join(""), encoding ?? "utf8")
+          ? Buffer.from(stderr.strings.join(""), encoding)
           : Buffer.concat(stderr.buffers, stderr.bytes),
       code,
       signal,
-      messages: [...messages],
       durationMs: elapsed(),
     });
 
     const stop = (): void => {
-      if (terminated) {
-        return;
-      }
       terminated = true;
       upstream?.unsubscribe();
     };
@@ -116,9 +115,6 @@ export function rxCollect<
       message: string,
       cause?: unknown,
     ): void => {
-      if (terminated) {
-        return;
-      }
       const error = new RxChildProcessError(message, {
         kind,
         command,
@@ -130,10 +126,6 @@ export function rxCollect<
     };
 
     const finish = (): void => {
-      if (terminated) {
-        return;
-      }
-
       const result = buildResult();
       const failedByCode =
         failOnNonZeroExit && code !== null && code !== 0;
@@ -172,7 +164,7 @@ export function rxCollect<
       if (mode === "string") {
         const value = chunk as string;
         state.strings.push(value);
-        state.bytes += Buffer.byteLength(value, encoding ?? "utf8");
+        state.bytes += Buffer.byteLength(value, encoding);
       } else {
         const value = chunk as Buffer;
         state.buffers.push(value);
@@ -191,7 +183,8 @@ export function rxCollect<
           case "spawn":
             command = event.command;
             pid = event.pid;
-            encoding = event.encoding;
+            encoding =
+              event.encoding === null ? "utf8" : event.encoding;
             break;
           case "stdout":
             appendChunk(stdout, event.chunk);
@@ -236,7 +229,7 @@ export function rxCollect<
           return;
         }
         terminated = true;
-        if (error instanceof RxChildProcessError) {
+        if (isRxChildProcessError(error)) {
           subscriber.error(error);
           return;
         }

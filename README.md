@@ -36,28 +36,30 @@ console.log(result.stdout.toString());
 低层 API 返回 `Observable<RxProcessEvent>`：
 
 ```ts
-import { rxSpawn } from "rx-child-process";
+import { filterEvent, RxEventType, rxSpawn } from "rx-child-process";
 
-rxSpawn("node", ["worker.mjs"]).subscribe({
+const source = rxSpawn("node", ["worker.mjs"]);
+
+source.pipe(filterEvent(RxEventType.Stdout)).subscribe({
   next(event) {
-    switch (event.type) {
-      case "spawn":
-        console.log("PID", event.pid);
-        event.child.send?.({ type: "start" });
-        break;
-      case "stdout":
-      case "stderr":
-        process[event.type].write(event.chunk);
-        break;
-      case "close":
-        console.log("退出码", event.code, "信号", event.signal);
-        break;
-    }
+    process.stdout.write(event.chunk);
   },
   error(error) {
     console.error(error);
   },
 });
+```
+
+`filterEvent` 会保留原始消息和输出泛型。需要分别消费多个通道时，应先共享同一个源，避免每个订阅重复启动进程：
+
+```ts
+import { merge, share } from "rxjs";
+
+const shared = rxSpawn("node", ["worker.mjs"]).pipe(share());
+merge(
+  shared.pipe(filterEvent(RxEventType.Stdout)),
+  shared.pipe(filterEvent(RxEventType.Stderr)),
+).subscribe(console.log);
 ```
 
 ## 安全边界
@@ -78,11 +80,16 @@ rxExec(`convert ${untrustedInput} output.png`);
 
 ```ts
 rxSpawn(command, args?, options?)
+rxSpawn(command, options)
 rxExec(command, options?)
 rxExecFile(file, args?, options?)
+rxExecFile(file, options)
 rxFork(modulePath, args?, options?)
+rxFork(modulePath, options)
 rxNodeCode(code, args?, options?)
+rxNodeCode(code, options)
 rxNodeModule(modulePath, args?, options?)
+rxNodeModule(modulePath, options)
 rxCollect(source, options?)
 ```
 
@@ -90,10 +97,10 @@ rxCollect(source, options?)
 
 ```ts
 type RxProcessEvent<TMessage = unknown, TOutput extends Buffer | string = Buffer> =
-  | { type: "spawn"; pid?: number; child: ChildProcess; command; encoding }
+  | { type: "spawn"; pid: number; child: ChildProcess; command; encoding }
   | { type: "stdout"; chunk: TOutput }
   | { type: "stderr"; chunk: TOutput }
-  | { type: "message"; message: TMessage; sendHandle?: unknown }
+  | { type: "message"; message: TMessage; sendHandle?: RxSendHandle }
   | { type: "disconnect" }
   | { type: "exit"; code: number | null; signal: NodeJS.Signals | null }
   | {
@@ -106,16 +113,35 @@ type RxProcessEvent<TMessage = unknown, TOutput extends Buffer | string = Buffer
 
 stdout、stderr 和消息按实际到达顺序交错发射。正常启动后依次产生数据、`exit` 和 `close` 事件。
 
+输出事件分别使用 `RxStdoutEvent` 和 `RxStderrEvent`，同时保留联合类型 `RxOutputEvent`。
+
+可以继续使用字符串判别，也可以使用导出的事件常量和类型守卫：
+
+```ts
+import {
+  isCloseEvent,
+  isMessageEvent,
+  isSpawnEvent,
+  isStderrEvent,
+  isStdoutEvent,
+  RxEventType,
+} from "rx-child-process";
+
+event.type === RxEventType.Stdout;
+isSpawnEvent(event);
+isMessageEvent(event);
+```
+
 ### 选项
 
 | 选项 | 默认值 | 说明 |
 | --- | --- | --- |
 | `signal` | 无 | 通过 AbortSignal 取消执行 |
-| `timeoutMs` | `30000` | 执行超时；`0` 或 `Infinity` 关闭 |
+| `timeoutMs` | `30000` | 执行超时；`0` 或 `RxLimits.Disabled` 关闭 |
 | `killGraceMs` | `2000` | SIGTERM 到 SIGKILL 的等待时间 |
 | `killTree` | `true` | 是否终止整个进程树 |
-| `maxStdoutBytes` | `10 MiB` | stdout 总量上限；`0` 或 `Infinity` 关闭 |
-| `maxStderrBytes` | `10 MiB` | stderr 总量上限；`0` 或 `Infinity` 关闭 |
+| `maxStdoutBytes` | `10 MiB` | stdout 总量上限；`0` 或 `RxLimits.Disabled` 关闭 |
+| `maxStderrBytes` | `10 MiB` | stderr 总量上限；`0` 或 `RxLimits.Disabled` 关闭 |
 | `input` | 无 | string、Buffer、Readable 或 Observable |
 | `maxStdinQueueBytes` | `1 MiB` | Observable 输入等待 drain 时的积压上限 |
 | `encoding` | `null` | 输出编码；null 发射 Buffer |
@@ -124,9 +150,17 @@ stdout、stderr 和消息按实际到达顺序交错发射。正常启动后依�
 | `failOnSignal` | `false` | 低层是否将信号退出转入 error 通道 |
 | `maxMessages` | `1000` | `rxCollect` 最多保留的 IPC 消息数 |
 
+```ts
+import { RxLimits } from "rx-child-process";
+
+rxSpawn("long-task", { timeoutMs: RxLimits.Disabled });
+```
+
 `cwd`、`env`、`stdio`、`windowsHide` 等 Node 原生选项会继续透传。`timeout`、`signal`、`killSignal`、`detached`、`maxBuffer` 和 `encoding` 由本库统一管理。
 
 `rxFork` 默认启用 `silent: true` 以捕获 stdout 和 stderr；显式配置 `stdio` 时遵循 Node.js 的流类型。
+
+启用 `encoding` 后，成功结果和事件中的 chunk 为字符串；错误对象中的 `result.stdout` 和 `result.stderr` 始终是诊断 Buffer。低层错误快照每个通道最多保留 1 MiB。
 
 ## 错误
 
@@ -134,18 +168,23 @@ stdout、stderr 和消息按实际到达顺序交错发射。正常启动后依�
 
 ```ts
 import { firstValueFrom } from "rxjs";
-import { RxChildProcessError } from "rx-child-process";
+import {
+  isRxChildProcessError,
+  RxErrorKind,
+  rxCollect,
+  rxExecFile,
+} from "rx-child-process";
 
 try {
   await firstValueFrom(rxCollect(rxExecFile("missing-command")));
 } catch (error) {
-  if (error instanceof RxChildProcessError) {
+  if (isRxChildProcessError(error, RxErrorKind.Spawn)) {
     console.log(error.kind, error.command, error.result?.stderr);
   }
 }
 ```
 
-`kind` 可为 `configuration`、`spawn`、`runtime`、`abort`、`timeout`、`output-limit`、`message-limit`、`stdin`、`exit` 或 `signal`。
+`isRxChildProcessError` 不依赖原型链，适用于依赖重复安装或 ESM/CJS 混合加载场景。`RxErrorKind` 提供 `Abort`、`Timeout`、`Spawn`、`Exit`、`Signal` 等分类常量。
 
 低层失败开关默认关闭，因此非零退出仍会完整发射 `exit` 和 `close`。开启对应开关后，`close` 会先发射，随后进入 error 通道。`rxCollect` 默认把非零退出和异常信号视为失败。
 

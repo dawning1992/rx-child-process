@@ -5,6 +5,7 @@ import type {
   ForkOptions as NodeForkOptions,
   SpawnOptions as NodeSpawnOptions,
 } from "node:child_process";
+import type { Server as NetServer, Socket as NetSocket } from "node:net";
 import type { Readable } from "node:stream";
 import type { Observable } from "rxjs";
 
@@ -26,7 +27,7 @@ export interface RxBatchOptions {
 /**
  * 所有执行入口共享的受监管选项。
  *
- * 资源上限使用 `0` 或 `Infinity` 表示关闭；超时和终止宽限必须是非负值。
+ * 资源上限使用 `0` 或 `RxLimits.Disabled` 表示关闭；终止宽限必须是非负值。
  */
 export interface RxBaseOptions {
   /** 中止执行；中止后触发进程树回收并通过 error 通道报告。 */
@@ -103,8 +104,8 @@ export interface RxCommandDescriptor {
 /** 子进程成功创建后发射的生命周期事件。 */
 export interface RxSpawnEvent {
   readonly type: "spawn";
-  /** 子进程 PID；极端平台限制下可能不可用。 */
-  readonly pid?: number;
+  /** 子进程 PID。成功发射 spawn 事件时始终可用。 */
+  readonly pid: number;
   /** 原始 Node.js 子进程句柄，用于高级控制和 IPC。 */
   readonly child: ChildProcess;
   /** 当前执行的命令描述。 */
@@ -113,17 +114,31 @@ export interface RxSpawnEvent {
   readonly encoding: BufferEncoding | null;
 }
 
-/** stdout 或 stderr 数据事件。 */
-export interface RxOutputEvent<TOutput extends Buffer | string = Buffer> {
-  readonly type: "stdout" | "stderr";
+/** stdout 数据事件。 */
+export interface RxStdoutEvent<TOutput extends Buffer | string = Buffer> {
+  readonly type: "stdout";
   readonly chunk: TOutput;
 }
+
+/** stderr 数据事件。 */
+export interface RxStderrEvent<TOutput extends Buffer | string = Buffer> {
+  readonly type: "stderr";
+  readonly chunk: TOutput;
+}
+
+/** stdout 或 stderr 数据事件。 */
+export type RxOutputEvent<TOutput extends Buffer | string = Buffer> =
+  | RxStdoutEvent<TOutput>
+  | RxStderrEvent<TOutput>;
+
+/** fork IPC 可传递的 Node.js 句柄。 */
+export type RxSendHandle = NetSocket | NetServer;
 
 /** fork IPC 消息事件。 */
 export interface RxMessageEvent<TMessage = unknown> {
   readonly type: "message";
   readonly message: TMessage;
-  readonly sendHandle?: unknown;
+  readonly sendHandle?: RxSendHandle;
 }
 
 /** fork IPC 通道断开事件。 */
@@ -152,7 +167,8 @@ export type RxProcessEvent<
   TOutput extends Buffer | string = Buffer,
 > =
   | RxSpawnEvent
-  | RxOutputEvent<TOutput>
+  | RxStdoutEvent<TOutput>
+  | RxStderrEvent<TOutput>
   | RxMessageEvent<TMessage>
   | RxDisconnectEvent
   | RxExitEvent

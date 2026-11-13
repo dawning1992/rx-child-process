@@ -1,4 +1,10 @@
-import { rxSpawn, type RxProcessEvent } from "../src/index.js";
+import {
+  filterEvent,
+  RxEventType,
+  rxSpawn,
+  type RxProcessEvent,
+  type RxStdoutEvent,
+} from "../src/index.js";
 
 const source = rxSpawn(
   process.execPath,
@@ -19,11 +25,9 @@ const source = rxSpawn(
   },
 );
 
-source.subscribe({
-  next(event: RxProcessEvent<unknown, Buffer | string>) {
-    if (event.type === "stdout") {
-      process.stdout.write(event.chunk);
-    }
+source.pipe(filterEvent(RxEventType.Stdout)).subscribe({
+  next(event: RxStdoutEvent<Buffer | string>) {
+    process.stdout.write(event.chunk);
   },
   error(error) {
     console.error(error);

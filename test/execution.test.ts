@@ -8,6 +8,8 @@ import {
   firstValueFrom,
   lastValueFrom,
   of,
+  type Subscriber,
+  type Subscription,
   toArray,
 } from "rxjs";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
@@ -24,7 +26,12 @@ import {
   type RxCommandResult,
   type RxProcessEvent,
 } from "../src/index.js";
-import { fixture, isProcessAlive, sleep } from "./helpers.js";
+import {
+  fixture,
+  isProcessAlive,
+  sleep,
+  waitForProcessExit,
+} from "./helpers.js";
 
 async function collectEvents<TMessage = unknown>(
   source: Observable<RxProcessEvent<TMessage, Buffer | string>>,
@@ -178,6 +185,23 @@ describe("执行与聚合", () => {
     expect(result.stdout).toBe("你");
   });
 
+  it.each([false, true])(
+    "关闭时输出不完整 UTF-8 序列（batching=%s）",
+    async (batching) => {
+      const result = await firstValueFrom(
+        rxCollect(
+          rxSpawn(process.execPath, [fixture("utf8-incomplete.mjs")], {
+            encoding: "utf8",
+            ...(batching ? { batching: { maxBytes: 1_000 } } : {}),
+            timeoutMs: 2_000,
+          }),
+        ),
+      );
+
+      expect(result.stdout).toBe("�");
+    },
+  );
+
   it("多个订阅各自启动独立子进程", async () => {
     const source = rxCollect(
       rxSpawn(process.execPath, [fixture("streams.mjs")], {
@@ -229,11 +253,22 @@ describe("错误、取消与资源限制", () => {
 
   it.each([
     ["timeoutMs", { timeoutMs: -1 }],
+    ["timeoutMs NaN", { timeoutMs: Number.NaN }],
     ["killGraceMs", { killGraceMs: -1 }],
     ["maxStdoutBytes", { maxStdoutBytes: -1 }],
+    ["maxStderrBytes", { maxStderrBytes: -1 }],
+    ["maxStdinQueueBytes", { maxStdinQueueBytes: -1 }],
     ["signal", { signal: {} as AbortSignal }],
     ["input", { input: 123 as unknown as string }],
     ["batching", { batching: true as never }],
+    [
+      "batching.maxBytes",
+      { batching: { maxBytes: -1 } },
+    ],
+    [
+      "batching.flushIntervalMs",
+      { batching: { flushIntervalMs: -1 } },
+    ],
   ])("拒绝无效 %s 选项", async (_name, options) => {
     await expect(
       firstValueFrom(
@@ -334,6 +369,19 @@ describe("错误、取消与资源限制", () => {
     ).rejects.toMatchObject({ kind: "output-limit" });
   });
 
+  it("stderr 超限时独立报告 output-limit", async () => {
+    await expect(
+      firstValueFrom(
+        rxCollect(
+          rxSpawn(process.execPath, [fixture("streams.mjs")], {
+            maxStderrBytes: 3,
+            timeoutMs: 2_000,
+          }),
+        ),
+      ),
+    ).rejects.toMatchObject({ kind: "output-limit" });
+  });
+
   it("错误快照独立限制为每通道 1 MiB", async () => {
     const failure = await firstValueFrom(
       rxCollect(
@@ -358,7 +406,7 @@ describe("错误、取消与资源限制", () => {
     );
   });
 
-  it("清理默认进程树中的孙进程", async () => {
+  it("清理真实进程树中的孙进程", async () => {
     const marker = join(
       tmpdir(),
       `rx-child-process-tree-${process.pid}-${Date.now()}`,
@@ -396,10 +444,8 @@ describe("错误、取消与资源限制", () => {
     expect(isProcessAlive(grandchildPid)).toBe(true);
 
     subscription.unsubscribe();
-    await sleep(180);
-
-    expect(isProcessAlive(childPid as number)).toBe(false);
-    expect(isProcessAlive(grandchildPid)).toBe(false);
+    expect(await waitForProcessExit(childPid as number)).toBe(true);
+    expect(await waitForProcessExit(grandchildPid)).toBe(true);
     await rm(marker, { force: true });
   });
 
@@ -457,6 +503,143 @@ describe("错误、取消与资源限制", () => {
       kind: "runtime",
     });
   });
+
+  it("上游只发射 close 时也会在下个微任务完成任务聚合", async () => {
+    const source = new Observable<RxProcessEvent>((subscriber) => {
+      subscriber.next({
+        type: "close",
+        code: 0,
+        signal: null,
+        durationMs: 12,
+      });
+    });
+
+    const result = await firstValueFrom(rxCollect(source));
+    expect(result).toMatchObject({
+      command: { file: "<unknown>" },
+      code: 0,
+      signal: null,
+      durationMs: 12,
+    });
+  });
+
+  it("容忍违反 Observable 协议的重复终结回调", async () => {
+    let observer: Subscriber<RxProcessEvent> | undefined;
+    const unsubscribe = vi.fn();
+    const source = {
+      subscribe(received: Subscriber<RxProcessEvent>): Subscription {
+        observer = received;
+        return { unsubscribe } as unknown as Subscription;
+      },
+    } as unknown as Observable<RxProcessEvent>;
+    const resultPromise = firstValueFrom(rxCollect(source));
+
+    observer?.next({ type: "close", code: 0, signal: null, durationMs: 1 });
+    observer?.next({ type: "close", code: 0, signal: null, durationMs: 1 });
+    await Promise.resolve();
+    observer?.next({ type: "stdout", chunk: Buffer.from("late") });
+    observer?.error(new Error("late error"));
+
+    await expect(resultPromise).resolves.toMatchObject({
+      code: 0,
+      durationMs: 1,
+    });
+    expect(unsubscribe).toHaveBeenCalled();
+  });
+
+  it("上游在未发射 close 时直接完成也会返回已聚合结果", async () => {
+    const source = new Observable<RxProcessEvent>((subscriber) => {
+      subscriber.next({ type: "stdout", chunk: Buffer.from("partial") });
+      subscriber.next({
+        type: "spawn",
+        pid: 99,
+        child: {} as ChildProcess,
+        command: {
+          file: "partial-command",
+          args: [],
+          shell: false,
+        },
+        encoding: null,
+      });
+      subscriber.complete();
+    });
+
+    const result = await firstValueFrom(rxCollect(source));
+    expect(result.command.file).toBe("partial-command");
+    expect(result.pid).toBe(99);
+    expect(text(result.stdout)).toBe("partial");
+    expect(result.code).toBeNull();
+    expect(result.signal).toBeNull();
+    expect(result.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("字符串输出发生失败时错误快照仍为 Buffer", async () => {
+    const source = new Observable<RxProcessEvent<unknown, string>>(
+      (subscriber) => {
+        subscriber.next({
+          type: "spawn",
+          pid: 7,
+          child: {} as ChildProcess,
+          command: {
+            file: "encoded-command",
+            args: [],
+            shell: false,
+          },
+          encoding: "utf8",
+        });
+        subscriber.next({ type: "stdout", chunk: "你好" });
+        subscriber.next({ type: "close", code: 2, signal: null, durationMs: 5 });
+        subscriber.complete();
+      },
+    );
+
+    const failure = await firstValueFrom(rxCollect(source)).catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(RxChildProcessError);
+    expect((failure as RxChildProcessError).result?.stdout.toString()).toBe(
+      "你好",
+    );
+    expect(Buffer.isBuffer((failure as RxChildProcessError).result?.stdout)).toBe(
+      true,
+    );
+  });
+
+  it("stderr 字符串内容也会进入失败快照", async () => {
+    const source = new Observable<RxProcessEvent<unknown, string>>(
+      (subscriber) => {
+        subscriber.next({
+          type: "stderr",
+          chunk: "失败详情",
+        });
+        subscriber.next({ type: "close", code: 1, signal: null, durationMs: 1 });
+        subscriber.complete();
+      },
+    );
+
+    const failure = await firstValueFrom(rxCollect(source)).catch(
+      (error: unknown) => error,
+    );
+    expect((failure as RxChildProcessError).result?.stderr.toString()).toBe(
+      "失败详情",
+    );
+  });
+
+  it.each([0, Number.POSITIVE_INFINITY])(
+    "maxMessages 为 %s 时关闭消息数量限制",
+    async (maxMessages) => {
+      const source = new Observable<RxProcessEvent>((subscriber) => {
+        for (let index = 0; index < 5; index += 1) {
+          subscriber.next({ type: "message", message: index });
+        }
+        subscriber.next({ type: "close", code: 0, signal: null, durationMs: 1 });
+        subscriber.complete();
+      });
+
+      const result = await firstValueFrom(rxCollect(source, { maxMessages }));
+      expect(result.messages).toEqual([0, 1, 2, 3, 4]);
+    },
+  );
 
   it("拒绝混用 Buffer 和 string 的上游输出", async () => {
     const source = of(
