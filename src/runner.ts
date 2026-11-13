@@ -117,14 +117,18 @@ export function execute<
       validateStdio(request, normalized);
     } catch (error) {
       subscriber.error(
-        configurationError(request.command, error, "无效的子进程配置"),
+        configurationError(
+          request.command,
+          error,
+          "Invalid child process configuration",
+        ),
       );
       return undefined;
     }
 
     if (normalized.signal?.aborted) {
       subscriber.error(
-        new RxChildProcessError("子进程在启动前已被取消", {
+        new RxChildProcessError("Child process was aborted before startup", {
           kind: "abort",
           command: request.command,
           cause: normalized.signal.reason,
@@ -326,7 +330,7 @@ export function execute<
       ) {
         fail(
           "output-limit",
-          `${channel.name} 输出超过 ${channel.maxBytes} 字节限制`,
+          `${channel.name} output exceeded the ${channel.maxBytes}-byte limit`,
         );
         return;
       }
@@ -376,7 +380,7 @@ export function execute<
       child = request.launch(nativeOptions);
     } catch (error) {
       subscriber.error(
-        new RxChildProcessError("无法创建子进程", {
+        new RxChildProcessError("Failed to create child process", {
           kind: "spawn",
           command: request.command,
           cause: error,
@@ -402,7 +406,7 @@ export function execute<
       if (!finished && !subscriber.closed) {
         const pid = currentChild.pid;
         if (pid === undefined) {
-          fail("spawn", "子进程启动后未分配 PID");
+          fail("spawn", "Child process did not receive a PID after startup");
           return;
         }
         const event: RxSpawnEvent = {
@@ -418,7 +422,9 @@ export function execute<
     const onError = (error: Error): void => {
       fail(
         spawnSeen ? "runtime" : "spawn",
-        spawnSeen ? "子进程报告运行时错误" : "子进程启动失败",
+        spawnSeen
+          ? "Child process reported a runtime error"
+          : "Child process failed to start",
         error,
       );
     };
@@ -483,8 +489,8 @@ export function execute<
         subscriber.error(
           new RxChildProcessError(
             failedByCode
-              ? `子进程以退出码 ${code} 结束`
-              : `子进程被信号 ${signal} 终止`,
+              ? `Child process exited with code ${code}`
+              : `Child process terminated by signal ${signal}`,
             {
               kind: failedByCode ? "exit" : "signal",
               command: request.command,
@@ -535,7 +541,7 @@ export function execute<
       timeoutTimer = setTimeout(() => {
         fail(
           "timeout",
-          `子进程执行超过 ${normalized.timeoutMs} 毫秒限制`,
+          `Child process exceeded the ${normalized.timeoutMs} ms timeout`,
         );
       }, normalized.timeoutMs);
       timeoutTimer.unref();
@@ -551,7 +557,7 @@ export function execute<
       const signal = normalized.signal;
       const onAbort = (): void => {
         if (!processClosed) {
-          fail("abort", "子进程执行已取消", signal.reason);
+          fail("abort", "Child process execution was aborted", signal.reason);
         }
       };
       signal.addEventListener("abort", onAbort, { once: true });
@@ -613,26 +619,31 @@ function normalizeOptions(
   const encoding = options.encoding ?? null;
 
   if (encoding !== null && !Buffer.isEncoding(encoding)) {
-    throw new TypeError(`不支持的输出编码: ${String(encoding)}`);
+    throw new TypeError(`Unsupported output encoding: ${String(encoding)}`);
   }
   if (encoding !== null) {
     try {
       new StringDecoder(encoding);
     } catch (error) {
-      throw new TypeError(`当前 Node.js 不支持输出编码: ${encoding}`, {
-        cause: error,
-      });
+      throw new TypeError(
+        `Output encoding is not supported by the current Node.js: ${encoding}`,
+        {
+          cause: error,
+        },
+      );
     }
   }
 
   const signal = options.signal;
   if (signal !== undefined && !isAbortSignal(signal)) {
-    throw new TypeError("signal 必须是 AbortSignal");
+    throw new TypeError("signal must be an AbortSignal");
   }
 
   const input = options.input;
   if (input !== undefined && !isSupportedInput(input)) {
-    throw new TypeError("input 必须是 string、Buffer、Readable 或 Observable");
+    throw new TypeError(
+      "input must be a string, Buffer, Readable, or Observable",
+    );
   }
 
   return {
@@ -658,7 +669,9 @@ function normalizeBatching(
     return undefined;
   }
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new TypeError("batching 必须是 false 或批处理选项对象");
+    throw new TypeError(
+      "batching must be false or a batching options object",
+    );
   }
 
   const maxBytes = normalizeLimit(
@@ -687,7 +700,7 @@ function normalizeLimit(
     return Number.POSITIVE_INFINITY;
   }
   if (!Number.isFinite(value) || value < 0) {
-    throw new TypeError(`${name} 必须是非负数、0 或 Infinity`);
+    throw new TypeError(`${name} must be non-negative, 0, or Infinity`);
   }
   return Math.floor(value);
 }
@@ -704,7 +717,7 @@ function normalizeNonNegative(
     return value;
   }
   if (!Number.isFinite(value) || value < 0) {
-    throw new TypeError(`${name} 必须是非负数或 Infinity`);
+    throw new TypeError(`${name} must be non-negative or Infinity`);
   }
   return Math.floor(value);
 }
@@ -717,7 +730,7 @@ function validateStdio(
     normalized.input !== undefined &&
     !isPipe(request.options.stdio, 0, request.stdinPipeByDefault)
   ) {
-    throw new TypeError("配置 input 时 stdin 必须是 pipe");
+    throw new TypeError("stdin must be a pipe when input is configured");
   }
 }
 
@@ -802,7 +815,10 @@ function wireInput(options: WireInputOptions): (() => void) | undefined {
   }
 
   if (!stdin) {
-    options.fail("stdin", "当前 stdio 配置没有可写的 stdin pipe");
+    options.fail(
+      "stdin",
+      "The current stdio configuration has no writable stdin pipe",
+    );
     return undefined;
   }
 
@@ -813,7 +829,7 @@ function wireInput(options: WireInputOptions): (() => void) | undefined {
       stdin.end(input);
     } catch (error) {
       if (!isIgnorableStdinError(error)) {
-        options.fail("stdin", "写入子进程 stdin 失败", error);
+        options.fail("stdin", "Failed to write to child process stdin", error);
       }
     }
     return cleanup;
@@ -822,7 +838,7 @@ function wireInput(options: WireInputOptions): (() => void) | undefined {
   if (isReadable(input)) {
     const onReadableError = (error: Error): void => {
       if (!options.isFinished()) {
-        options.fail("stdin", "读取 stdin 输入失败", error);
+        options.fail("stdin", "Failed to read stdin input", error);
       }
     };
     const cleanupGuard = attachStdinErrorGuard(stdin, options);
@@ -837,7 +853,7 @@ function wireInput(options: WireInputOptions): (() => void) | undefined {
   }
 
   if (!isObservable(input)) {
-    options.fail("stdin", "不支持的 stdin 输入类型");
+    options.fail("stdin", "Unsupported stdin input type");
     return undefined;
   }
 
@@ -886,7 +902,11 @@ function wireObservableInput(
         }
       } catch (error) {
         if (!isIgnorableStdinError(error)) {
-          options.fail("stdin", "写入子进程 stdin 失败", error);
+          options.fail(
+            "stdin",
+            "Failed to write to child process stdin",
+            error,
+          );
         }
         return;
       }
@@ -913,7 +933,7 @@ function wireObservableInput(
       ) {
         options.fail(
           "stdin",
-          `stdin Observable 积压超过 ${options.maxQueueBytes} 字节限制`,
+          `stdin Observable backlog exceeded the ${options.maxQueueBytes}-byte limit`,
         );
         return;
       }
@@ -923,7 +943,7 @@ function wireObservableInput(
     },
     error(error) {
       if (!disposed && !options.isFinished()) {
-        options.fail("stdin", "stdin Observable 输入失败", error);
+        options.fail("stdin", "stdin Observable input failed", error);
       }
     },
     complete() {
@@ -959,7 +979,7 @@ function attachStdinErrorGuard(
     if (options.isFinished() || isIgnorableStdinError(error)) {
       return;
     }
-    options.fail("stdin", "子进程 stdin 发生错误", error);
+    options.fail("stdin", "Child process stdin encountered an error", error);
   };
 
   stdin.on("error", onStdinError);

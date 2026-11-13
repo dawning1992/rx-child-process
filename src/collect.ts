@@ -46,7 +46,7 @@ export function rxCollect<
       maxMessages = normalizeMaxMessages(options.maxMessages);
     } catch (error) {
       subscriber.error(
-        new RxChildProcessError("无效的 rxCollect 配置", {
+        new RxChildProcessError("Invalid rxCollect configuration", {
           kind: "configuration",
           cause: error,
         }),
@@ -137,8 +137,8 @@ export function rxCollect<
         subscriber.error(
           new RxChildProcessError(
             failedByCode
-              ? `子进程以退出码 ${code} 结束`
-              : `子进程被信号 ${signal} 终止`,
+              ? `Child process exited with code ${code}`
+              : `Child process terminated by signal ${signal}`,
             {
               kind: failedByCode ? "exit" : "signal",
               command,
@@ -156,7 +156,10 @@ export function rxCollect<
     const appendChunk = (state: AggregateOutput, chunk: TOutput): boolean => {
       const mode = typeof chunk === "string" ? "string" : "buffer";
       if (state.mode !== undefined && state.mode !== mode) {
-        fail("configuration", "上游输出混用了 Buffer 和 string 数据块");
+        fail(
+          "configuration",
+          "Upstream output mixed Buffer and string chunks",
+        );
         return false;
       }
       state.mode = mode;
@@ -199,7 +202,7 @@ export function rxCollect<
             ) {
               fail(
                 "message-limit",
-                `IPC 消息数量超过 ${maxMessages} 条限制`,
+                `IPC message count exceeded the limit of ${maxMessages}`,
               );
               return;
             }
@@ -234,7 +237,7 @@ export function rxCollect<
           return;
         }
         subscriber.error(
-          new RxChildProcessError("子进程事件流发生错误", {
+          new RxChildProcessError("Child process event stream failed", {
             kind: "runtime",
             command,
             result: buildErrorResult(),
@@ -280,7 +283,7 @@ function normalizeMaxMessages(value: number | undefined): number {
     return Number.POSITIVE_INFINITY;
   }
   if (!Number.isFinite(value) || value < 0) {
-    throw new TypeError("maxMessages 必须是非负数、0 或 Infinity");
+    throw new TypeError("maxMessages must be non-negative, 0, or Infinity");
   }
   return Math.floor(value);
 }

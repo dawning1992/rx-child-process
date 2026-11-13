@@ -34,10 +34,11 @@ describe("输出解码器兼容性", () => {
 
     await expect(lastValueFrom(source)).rejects.toMatchObject({
       kind: "configuration",
-      message: "无效的子进程配置",
+      message: "Invalid child process configuration",
       cause: {
         name: "TypeError",
-        message: "当前 Node.js 不支持输出编码: utf8",
+        message:
+          "Output encoding is not supported by the current Node.js: utf8",
       },
     });
     expect(launch).not.toHaveBeenCalled();

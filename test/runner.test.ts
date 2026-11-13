@@ -114,7 +114,7 @@ describe("执行运行时异常路径", () => {
 
     await expect(promise).rejects.toMatchObject({
       kind: "spawn",
-      message: "子进程启动后未分配 PID",
+      message: "Child process did not receive a PID after startup",
     });
   });
 
@@ -371,7 +371,7 @@ describe("stdin 异常与背压路径", () => {
 
     await expect(promise).rejects.toMatchObject({
       kind: "stdin",
-      message: "当前 stdio 配置没有可写的 stdin pipe",
+      message: "The current stdio configuration has no writable stdin pipe",
     });
   });
 
@@ -557,7 +557,7 @@ describe("stdin 异常与背压路径", () => {
 
     await expect(lastValueFrom(source)).rejects.toMatchObject({
       kind: "stdin",
-      message: "不支持的 stdin 输入类型",
+      message: "Unsupported stdin input type",
     });
   });
 });
