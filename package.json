@@ -51,6 +51,10 @@
     "cancellation"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dawning1992/rx-child-process.git"
+  },
   "peerDependencies": {
     "rxjs": "^7.5.5"
   },
