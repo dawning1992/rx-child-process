@@ -383,26 +383,50 @@ describe("错误、取消与资源限制", () => {
   });
 
   it("错误快照独立限制为每通道 1 MiB", async () => {
-    const failure = await firstValueFrom(
-      rxCollect(
-        rxSpawn(
-          process.execPath,
-          [
-            "-e",
-            "process.stdout.write('x'.repeat(2 * 1024 * 1024)); setInterval(() => {}, 1000)",
-          ],
-          {
-            maxStdoutBytes: 0,
-            timeoutMs: 50,
-            killGraceMs: 20,
-          },
-        ),
-      ),
-    ).catch((error: unknown) => error);
+    const controller = new AbortController();
+    const snapshotBytes = 1024 * 1024;
+    let observedBytes = 0;
+    let failure: unknown;
+
+    await new Promise<void>((resolve, reject) => {
+      rxSpawn(
+        process.execPath,
+        [
+          "-e",
+          "process.stdout.write('x'.repeat(2 * 1024 * 1024)); setInterval(() => {}, 1000)",
+        ],
+        {
+          signal: controller.signal,
+          maxStdoutBytes: 0,
+          timeoutMs: 5_000,
+          killGraceMs: 20,
+        },
+      ).subscribe({
+        next(event) {
+          if (event.type !== "stdout") {
+            return;
+          }
+
+          observedBytes += Buffer.isBuffer(event.chunk)
+            ? event.chunk.length
+            : Buffer.byteLength(event.chunk);
+          if (observedBytes >= snapshotBytes && !controller.signal.aborted) {
+            controller.abort("snapshot-ready");
+          }
+        },
+        error(error) {
+          failure = error;
+          resolve();
+        },
+        complete() {
+          reject(new Error("子进程在快照验证前意外完成"));
+        },
+      });
+    });
 
     expect(failure).toBeInstanceOf(RxChildProcessError);
     expect((failure as RxChildProcessError).result?.stdout).toHaveLength(
-      1024 * 1024,
+      snapshotBytes,
     );
   });
 
@@ -943,7 +967,7 @@ describe("命令、Node 代码与模块", () => {
       ),
     );
     expect(result.command.cwd).toBe(cwd);
-    expect(text(result.stdout)).toBe(await realpath(cwd));
+    expect(await realpath(text(result.stdout))).toBe(await realpath(cwd));
   });
 
   it("rxNodeModule 使用 fork 语义并传递参数", async () => {

@@ -28,7 +28,7 @@
   "engines": {
     "node": ">=20"
   },
-  "packageManager": "pnpm@11.21.0",
+  "packageManager": "pnpm@10.34.9",
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",
